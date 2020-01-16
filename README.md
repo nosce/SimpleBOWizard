@@ -109,4 +109,6 @@ If you do not want to send the payload to the target automatically, you can ente
 After creating the exploit file in step 1, the wizard will only update the buffer in the following steps. This ensures that
 manual changes that you make in the exploit script will be retained.  
 Manual changes might be required, for example, if you need another request before sending the buffer.
-                                                                                                                                                                                                                                                                                                                                                                                                                                                 
+
+
+<sup>Author proof: b9a0eabd3f59c55c0828edf52e05a3fa4ef886084f1edce042ed4f695c42907a</sup>
