@@ -111,4 +111,4 @@ manual changes that you make in the exploit script will be retained.
 Manual changes might be required, for example, if you need another request before sending the buffer.
 
 
-<sup>Author proof: b9a0eabd3f59c55c0828edf52e05a3fa4ef886084f1edce042ed4f695c42907a</sup>
+<sup>Author proof: 985554ab1a1ae7b3a0ec6ff0bedc3cdca5ed269e0ccdbc634a80ff33a9865d2d</sup>
